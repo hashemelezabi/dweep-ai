@@ -42,10 +42,10 @@ class DweepEnv(gym.Env):
         I.e. 0 corresponds to "right", 1 to "up" etc.
         """
         self._action_to_direction = {
-            0: np.array([1, 0]),
-            1: np.array([0, 1]),
-            2: np.array([-1, 0]),
-            3: np.array([0, -1]),
+            0: np.array([1, 0]), # right
+            1: np.array([0, -1]), # up
+            2: np.array([-1, 0]), # left
+            3: np.array([0, 1]), # down
         }
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -65,8 +65,8 @@ class DweepEnv(gym.Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
-        self._agent_location = np.array([0, 9]) # Top-left
-        self._target_location = np.array([8, 0]) # In bottom-right corner
+        self._agent_location = np.array([0, 0]) # Top-left
+        self._target_location = np.array([9, 7]) # In bottom-right corner
 
         observation = self._get_obs()
         info = self._get_info()
@@ -145,7 +145,7 @@ class DweepEnv(gym.Env):
             canvas,
             (50, 255, 255),
             pygame.Rect(
-                pix_square_size * self._target_location,
+                pix_square_size * np.flip(self._target_location),
                 (pix_square_size, pix_square_size),
             ),
         )
@@ -153,7 +153,7 @@ class DweepEnv(gym.Env):
         pygame.draw.circle(
             canvas,
             (255, 0, 255),
-            (self._agent_location + 0.5) * pix_square_size,
+            (np.flip(self._agent_location) + 0.5) * pix_square_size,
             pix_square_size / 3,
         )
 
@@ -167,7 +167,7 @@ class DweepEnv(gym.Env):
                         canvas,
                         (0, 0, 0),
                         pygame.Rect(
-                            pix_square_size * loc,
+                            pix_square_size * np.flip(loc),
                             (pix_square_size, pix_square_size),
                         ),
                     )
@@ -176,7 +176,7 @@ class DweepEnv(gym.Env):
                         canvas,
                         (0, 0, 255),
                         pygame.Rect(
-                            pix_square_size * loc,
+                            pix_square_size * np.flip(loc),
                             (pix_square_size, pix_square_size),
                         ),
                     )
@@ -185,8 +185,8 @@ class DweepEnv(gym.Env):
                         canvas,
                         (0, 255, 0),
                         pygame.Rect(
-                            pix_square_size * loc,
-                            (pix_square_size / 4, pix_square_size),
+                            pix_square_size * np.flip(loc + 0.25),
+                            (pix_square_size / 2, pix_square_size),
                         ),
                     )
 
@@ -230,7 +230,8 @@ class DweepEnv(gym.Env):
 if __name__ == '__main__':
     env = DweepEnv(render_mode="human", size=10)
     env.reset()
-    for _ in range(10):
+    for _ in range(1000):
         action = env.action_space.sample()  # take a random action
+        action = 1
         env.step(action)
     env.close()
