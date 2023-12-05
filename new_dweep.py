@@ -2,19 +2,32 @@ import gym
 from gym import spaces
 import pygame
 import numpy as np
-import random
 
+"""
+0: Empty Square
+1: Wall
+2: Up Laser Generator
+3: Down Laser Generator
+4: Right Laser Generator
+5: Left Laser Generator
+3 (temp): Laser Beam
+6: Target
+7: Bomb
+8: Freeze Plate
+9: Right Mirror
+10: Left Mirror
+"""
 MAP = np.array([
-    [0, 0, 0, 0, 3, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 3, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 3, 0, 0, 0, 0, 0],
-    [1, 1, 1, 0, 2, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 8, 8],
+    [0, 0, 0, 0, 9, 10, 0, 0, 8, 8],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 2, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 9, 0, 0, 0, 0],
     [1, 1, 1, 1, 1, 0, 1, 1, 0, 0],
+    [0, 0, 5, 1, 3, 0, 1, 0, 0, 0],
+    [4, 0, 0, 1, 0, 0, 1, 0, 0, 0],
     [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
-    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
-    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
-    [0, 0, 0, 1, 0, 0, 1, 4, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 6, 0, 0],
 ])
 
 
@@ -29,13 +42,14 @@ class DweepEnv(gym.Env):
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
         self.observation_space = spaces.Dict(
             {
-                "agent": spaces.Discrete(100), # 100 possible Dweep locations
-                "target": spaces.Discrete(2), # 2 possible target locations for now
+                "agent": spaces.Box(0, size - 1, shape=(2,), dtype=int),
+                "target": spaces.Box(0, size - 1, shape=(2,), dtype=int),
             }
         )
 
         # We have 4 actions, corresponding to "right", "up", "left", "down"
-        self.action_space = spaces.Discrete(4)
+        # We have 4 more actions corresponding to diagonal movement (8 total)
+        self.action_space = spaces.Discrete(8)
 
         """
         The following dictionary maps abstract actions from `self.action_space` to 
@@ -47,6 +61,10 @@ class DweepEnv(gym.Env):
             1: np.array([0, -1]), # up
             2: np.array([-1, 0]), # left
             3: np.array([0, 1]), # down
+            4: np.array([1, -1]), # up and right
+            5: np.array([-1, -1]), # up and left
+            6: np.array([1, 1]), # down and right
+            7: np.array([-1, 1]), # up and left
         }
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -62,17 +80,9 @@ class DweepEnv(gym.Env):
         self.window = None
         self.clock = None
 
-    def get_state_idx(self, state=None):
-        if state is None:
-            obs = self._get_obs()
-        else:
-            obs = state[0] if isinstance(state, tuple) else state
-
-        x, y = obs['agent'][0], obs['agent'][1]
-        i = x * self.size + y
-        if np.array_equal(obs['target'], np.array([0, 7])):
-            i += 100 # If it's the other possible target location
-        return i
+        self.game_map = MAP.copy() # This map can change
+        self.laser_map = np.full((MAP.shape[0], MAP.shape[1]), False) # Keeps track of laser paths
+        self.update_lasers()
 
     def reset(self, seed=None, options=None):
         # We need the following line to seed self.np_random
@@ -90,7 +100,7 @@ class DweepEnv(gym.Env):
         return observation, info
     
     def step(self, action):
-        # Map the action (element of {0,1,2,3}) to the direction we walk in
+        # Map the action (element of {0,1,2,3,4,5,6,7}) to the direction we walk in
         direction = self._action_to_direction[action]
         # We use `np.clip` to make sure we don't leave the grid
         new_location = np.clip(
@@ -99,23 +109,26 @@ class DweepEnv(gym.Env):
 
         x, y = new_location
 
-        if MAP[x, y] == 3:
+        # Check for laser beam collision
+
+
+        if self.game_map[x, y] in [1, 2, 3, 4, 5, 9, 10]:
+            # This is a wall or laser generator or mirror, so we stay at old location
+            reward = 0
+            terminated = False
+        elif self.laser_map[x, y]:
             # This is a laser, so we die
             self._agent_location = new_location
-            reward = -10
+            reward = -1
             terminated = True
-        elif MAP[x, y] in [1, 2]:
-            # This is a wall or laser generator, so we stay at old location
-            reward = -2
-            terminated = False
-        elif MAP[x, y] == 0:
+        elif self.game_map[x, y] in [0, 8]:
             # Dweep moves to a new square
             self._agent_location = new_location
-            reward = -1 # Give -1 reward to encourage Dweep to move to destination
+            reward = 0
             terminated = False
-        elif MAP[x, y] == 4:
+        elif self.game_map[x, y] == 6:
             self._agent_location = new_location
-            reward = 10 # Binary sparse rewards
+            reward = 1 # Binary sparse rewards
             terminated = True
         else:
             raise ValueError("Invalid entry in map")
@@ -170,12 +183,12 @@ class DweepEnv(gym.Env):
             pix_square_size / 3,
         )
 
-        # Draw the walls, laser, and laser generator
+        # Draw the walls, laser, laser generator, and freeze plates
         # TODO: Remove this hardcoded size
         for i in range(10):
             for j in range(10):
                 loc = np.array([i, j])
-                if MAP[i, j] == 1: # Draw wall
+                if self.game_map[i, j] == 1: # Draw wall
                     pygame.draw.rect(
                         canvas,
                         (0, 0, 0),
@@ -184,7 +197,7 @@ class DweepEnv(gym.Env):
                             (pix_square_size, pix_square_size),
                         ),
                     )
-                elif MAP[i, j] == 2: # Draw laser generator
+                elif self.game_map[i, j] == 2: # Draw laser generator
                     pygame.draw.rect(
                         canvas,
                         (0, 0, 255),
@@ -193,7 +206,27 @@ class DweepEnv(gym.Env):
                             (pix_square_size, pix_square_size),
                         ),
                     )
-                elif MAP[i, j] == 3: # Draw laser
+                elif self.game_map[i, j] == 8: # Draw freeze plate
+                    pygame.draw.rect(
+                        canvas,
+                        (0, 100, 100),
+                        pygame.Rect(
+                            pix_square_size * np.flip(loc),
+                            (pix_square_size, pix_square_size),
+                        )
+                    )
+                if self.laser_map[i, j]:
+                    pygame.draw.rect(
+                        canvas,
+                        (0, 255, 0),
+                        pygame.Rect(
+                            pix_square_size * np.flip(loc + 0.25),
+                            (pix_square_size / 2, pix_square_size),
+                        )
+                    )
+                # Commenting out the old code for drawing lasers
+                """
+                elif self.game_map[i, j] == 3: # Draw laser
                     pygame.draw.rect(
                         canvas,
                         (0, 255, 0),
@@ -202,7 +235,8 @@ class DweepEnv(gym.Env):
                             (pix_square_size / 2, pix_square_size),
                         ),
                     )
-
+                """
+        
         # Finally, add some gridlines
         for x in range(self.size + 1):
             pygame.draw.line(
@@ -239,64 +273,45 @@ class DweepEnv(gym.Env):
             pygame.display.quit()
             pygame.quit()
 
-def main():
-    # env = DweepEnv(render_mode="human", size=10)
-    env = DweepEnv(size=10)
-
-    num_states = 200
-    num_actions = 4
-    
-    Q = np.zeros((num_states, num_actions))
-    alpha = 0.1
-    gamma = 0.95
-    eps = 0.1
-
-    episodes = 1000
-    num_success = 0
-    state = env.reset()
-
-    for i in range(episodes):
-        state = env.reset()
-
-        steps = 0
-        total_rewards = 0
-        done = False
-        
-        while not done:
-            if random.uniform(0, 1) < eps:
-                action = env.action_space.sample() # Explore action space
-            else:
-                action = np.argmax(Q[env.get_state_idx()]) # Exploit learned values
-
-            next_state, reward, done, trunc, info = env.step(action) 
-            total_rewards += reward
-
-            # Q-Learning update
-            best_next_action = np.argmax(Q[env.get_state_idx()])
-            td_target = reward + gamma * Q[env.get_state_idx(), best_next_action]
-            td_error = td_target - Q[env.get_state_idx(state), action]
-            Q[env.get_state_idx(state), action] += alpha * td_error
-            
-            # new_value = (1 - alpha) * old_value + alpha * (reward + gamma * next_max)
-            # q_table[state, action] = new_value
-
-            if reward == 10:
-                num_success += 1
-
-            state = next_state
-            steps += 1
-        
-        if i % 10 == 0:
-            print(f"Avg return this episode: {total_rewards / steps}")
-            print(f"{num_success} successes out of {i+1} episodes")
-
-
-
+    # Helper method to update laser paths
+    def update_lasers(self):
+        direction = np.array([0, 0])
+        for row in range(self.game_map.shape[0]):
+            for col in range(self.game_map.shape[1]):
+                if self.game_map[row][col] == 2:
+                    direction = np.array([-1, 0])
+                elif self.game_map[row][col] == 3:
+                    direction = np.array([1, 0])
+                elif self.game_map[row][col] == 4:
+                    direction = np.array([0, 1])
+                elif self.game_map[row][col] == 5:
+                    direction = np.array([0, -1])
+                else:
+                    continue
+                # Following code only executes if the object is a laser generator
+                # Trace the laser's path until it hits a wall, changing direction at mirrors
+                loc = np.array([row, col])
+                loc += direction
+                while (loc[0] < self.laser_map.shape[0] and loc[0] >= 0 and loc[1] < self.laser_map.shape[1] and loc[1] >= 0):
+                    if self.game_map[loc[0]][loc[1]] == 1:
+                        break
+                    elif self.game_map[loc[0]][loc[1]] in [2, 3, 4, 5]:
+                        self.laser_map[loc[0]][loc[1]] = True
+                        break
+                    elif self.game_map[loc[0]][loc[1]] == 9:
+                        self.laser_map[loc[0]][loc[1]] = True
+                        direction = np.array([direction[1] * -1, direction[0] * -1])
+                    elif self.game_map[loc[0]][loc[1]] == 10:
+                        self.laser_map[loc[0]][loc[1]] = True
+                        direction = np.array([direction[1], direction[0]])
+                    else:
+                        self.laser_map[loc[0]][loc[1]] = True
+                    loc += direction
+                
 if __name__ == '__main__':
-    # env = DweepEnv(render_mode="human", size=10)
-    # env.reset()
-    # for _ in range(1000):
-    #     action = env.action_space.sample()  # take a random action
-    #     env.step(action)
-    # env.close()
-    main()
+    env = DweepEnv(render_mode="human", size=10)
+    env.reset()
+    for _ in range(1000):
+        action = env.action_space.sample()  # take a random action
+        env.step(action)
+    env.close()
