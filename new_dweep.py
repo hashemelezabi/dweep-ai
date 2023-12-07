@@ -2,6 +2,8 @@ import gym
 from gym import spaces
 import pygame
 import numpy as np
+import argparse
+from policy_learning import qlearning
 
 """
 0: Empty Square
@@ -30,13 +32,53 @@ MAP = np.array([
     [0, 0, 0, 1, 0, 0, 1, 6, 0, 0],
 ])
 
+WALL = 1
+TARGET = 6
+
+IMPASSABLE = [1, 2, 3, 4, 5, 9, 10]
+
+def get_target_distances(game_map):
+    distances = np.full(game_map.shape, 1000)
+    index_target = np.where(game_map == TARGET)
+
+    distances[index_target] = 0
+
+    while True:
+        old_distances = distances.copy()
+        for i in range(game_map.shape[0]):
+            for j in range(game_map.shape[1]):
+                square = game_map[i, j]
+                
+                if square in IMPASSABLE:
+                    continue
+
+                distances[i, j] = min(
+                    old_distances[np.clip(i + 1, 0, game_map.shape[0] - 1), j] + 1,
+                    old_distances[np.clip(i - 1, 0, game_map.shape[0] - 1), j] + 1,
+                    old_distances[i, np.clip(j + 1, 0, game_map.shape[1] - 1)] + 1,
+                    old_distances[i, np.clip(j - 1, 0, game_map.shape[1] - 1)] + 1,
+                    old_distances[i, j],
+                )
+
+        # print(distances)
+        if np.all(old_distances == distances):
+            break
+
+    return distances
+
 
 class DweepEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, size=5):
+    def __init__(self, render_mode=None, size=5, augment_rewards=False):
         self.size = size  # The size of the square grid
         self.window_size = 520  # The size of the PyGame window
+
+        # handle reward augmentation
+        self.augment_rewards = augment_rewards
+        self.distances = get_target_distances(MAP)
+
+        print(self.distances)
 
         # Observations are dictionaries with the agent's and the target's location.
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
@@ -132,6 +174,9 @@ class DweepEnv(gym.Env):
             terminated = True
         else:
             raise ValueError("Invalid entry in map")
+
+        if self.augment_rewards:
+            reward += 0.01 * -self.distances[new_location[0], new_location[1]]
 
         observation = self._get_obs()
         info = self._get_info()
@@ -267,7 +312,19 @@ class DweepEnv(gym.Env):
             return np.transpose(
                 np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
             )
-        
+
+    def get_state_idx(self, state=None):
+        if state is None:
+            obs = self._get_obs()
+        else:
+            obs = state[0] if isinstance(state, tuple) else state
+
+        x, y = obs['agent'][0], obs['agent'][1]
+        i = x * self.size + y
+        if np.array_equal(obs['target'], np.array([0, 7])):
+            i += 100 # If it's the other possible target location
+        return i
+   
     def close(self):
         if self.window is not None:
             pygame.display.quit()
@@ -309,9 +366,28 @@ class DweepEnv(gym.Env):
                     loc += direction
                 
 if __name__ == '__main__':
-    env = DweepEnv(render_mode="human", size=10)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--render', action='store_true')
+    parser.add_argument('--augment_rewards', '-a', action='store_true')
+    parser.add_argument('--qlearning', '-q', action='store_true')
+    args = parser.parse_args()
+
+    if args.qlearning:
+        Q = qlearning(DweepEnv(size=10, augment_rewards=args.augment_rewards), 
+        episodes=1000, alpha=0.1, gamma=0.95, eps=0.2)
+        print(np.max(Q, axis=1))
+        print(np.max(Q, axis=1).shape)
+
+
+    env = DweepEnv(render_mode="human", size=10, augment_rewards=args.augment_rewards)
     env.reset()
     for _ in range(1000):
-        action = env.action_space.sample()  # take a random action
-        env.step(action)
+        if not args.qlearning:
+            action = env.action_space.sample()  # take a random action
+        else:
+            action = np.argmax(Q[env.get_state_idx()])
+
+        observation, reward, _, _, _ = env.step(action)
+
     env.close()
