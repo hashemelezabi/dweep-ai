@@ -57,6 +57,10 @@ def get_target_distances(game_map):
                     old_distances[np.clip(i - 1, 0, game_map.shape[0] - 1), j] + 1,
                     old_distances[i, np.clip(j + 1, 0, game_map.shape[1] - 1)] + 1,
                     old_distances[i, np.clip(j - 1, 0, game_map.shape[1] - 1)] + 1,
+                    old_distances[np.clip(i + 1, 0, game_map.shape[0] - 1), np.clip(j + 1, 0, game_map.shape[1] - 1)] + 1,
+                    old_distances[np.clip(i - 1, 0, game_map.shape[0] - 1), np.clip(j - 1, 0, game_map.shape[1] - 1)] + 1,
+                    old_distances[np.clip(i + 1, 0, game_map.shape[0] - 1), np.clip(j - 1, 0, game_map.shape[1] - 1)] + 1,
+                    old_distances[np.clip(i - 1, 0, game_map.shape[0] - 1), np.clip(j + 1, 0, game_map.shape[1] - 1)] + 1,
                     old_distances[i, j],
                 )
 
