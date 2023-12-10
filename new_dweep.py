@@ -3,7 +3,7 @@ from gym import spaces
 import pygame
 import numpy as np
 import argparse
-from policy_learning import qlearning
+from policy_learning import qlearning, sarsa
 import time
 
 """
@@ -292,7 +292,7 @@ class DweepEnv(gym.Env):
         if action == 14:
             # water bucket case
             if self._has_bucket == 1 and self._wet == 0:
-                print("used water bucket")
+                # print("used water bucket")
                 self._wet = 1
                 self._has_bucket = 2
                 if self.augment_rewards:
@@ -314,10 +314,10 @@ class DweepEnv(gym.Env):
                     self.update_lasers()
 
                     if self.augment_rewards:
-                        print("good mirror placement: ", self._cursor_location)
+                        # print("good mirror placement: ", self._cursor_location)
                         reward += 0.2
             else:
-                print("bad mirror placement")
+                # print("bad mirror placement")
                 if self.augment_rewards:
                     reward = -0.1
 
@@ -331,7 +331,7 @@ class DweepEnv(gym.Env):
 
                 # print("cursor move", self._cursor_location, new_cursor_location)
                 if self.augment_rewards and (np.array_equal(new_cursor_location, self._agent_location) or np.array_equal(new_cursor_location, self._cursor_location)):
-                    print("bad cursor move")
+                    # print("bad cursor move")
                     reward = -0.01
 
                 self._cursor_location = new_cursor_location
@@ -359,7 +359,7 @@ class DweepEnv(gym.Env):
                 if not self._wet:
                     self._agent_location = new_location
                     reward = -1
-                    print("laser death")
+                    # print("laser death")
                     terminated = True
                 else:
                     self._agent_location = new_location
@@ -371,7 +371,7 @@ class DweepEnv(gym.Env):
                 self._agent_location = new_location
                 
                 if self.game_map[x, y] == Tiles.BUCKET:
-                    print("picked up water bucket")
+                    # print("picked up water bucket")
                     self._has_bucket = 1
                     self.game_map[x, y] = 0
                     if self.augment_rewards:
@@ -616,17 +616,24 @@ if __name__ == '__main__':
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--augment_rewards', '-a', action='store_true')
     parser.add_argument('--qlearning', '-q', action='store_true')
+    parser.add_argument('--sarsa', '-s', action='store_true')
     args = parser.parse_args()
 
     game_map = ORDERING_MAP
 
     if args.qlearning:
+        print("Learning with Q-Learning")
         Q = qlearning(DweepEnv(game_map, size=10, augment_rewards=args.augment_rewards), 
         episodes=10000, alpha=0.1, gamma=0.95, eps=0.2)
+    elif args.sarsa:
+        print("Learning with SARSA")
+        Q = sarsa(DweepEnv(game_map, size=10, augment_rewards=args.augment_rewards), 
+        episodes=120000, alpha=0.1, gamma=0.95, eps=0.2)
 
     env = DweepEnv(game_map, render_mode="human", size=10, augment_rewards=args.augment_rewards)
     env.reset()
-    print("Executing policy: ")
+
+    print("Executing policy:")
     for _ in range(30000):
         if not args.qlearning:
             action = env.action_space.sample()  # take a random action

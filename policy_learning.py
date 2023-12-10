@@ -1,7 +1,7 @@
 import numpy as np
 import random
 
-def qlearning(env, alpha, gamma, eps, episodes=1000):
+def qlearning(env, alpha, gamma, eps, episodes=1000, return_on_success=False, verbose=False):
     num_states = env.num_states
     num_actions = env.action_space.n
     
@@ -11,7 +11,8 @@ def qlearning(env, alpha, gamma, eps, episodes=1000):
     state = env.reset()
 
     for i in range(episodes):
-        print(f"Episode {i+1}")
+        if verbose:
+            print(f"Episode {i+1}")
         state = env.reset()
 
         steps = 0
@@ -38,17 +39,20 @@ def qlearning(env, alpha, gamma, eps, episodes=1000):
 
             if reward == 1000:
                 num_success += 1
+                if return_on_success:
+                    return Q, i
+
 
             state = next_state
             steps += 1
         
-        if i % 10 == 0:
+        if i % 10 == 0 and verbose:
             print(f"Avg return this episode: {total_rewards / steps}")
             print(f"{num_success} successes out of {i+1} episodes")
 
-    return Q
+    return Q, i
 
-def sarsa(env, alpha, gamma, eps, episodes=1000):
+def sarsa(env, alpha, gamma, eps, episodes=1000, return_on_success=False, verbose=False):
     num_states = env.num_states
     num_actions = env.action_space.n
     
@@ -58,32 +62,42 @@ def sarsa(env, alpha, gamma, eps, episodes=1000):
     state = env.reset()
 
     for i in range(episodes):
-        print(f"Episode {i+1}")
+        if verbose:
+            print(f"Episode {i+1}")
         state = env.reset()
 
         steps = 0
         total_rewards = 0
         done = False
+
+        last_exp_tuple = None
         
         while not done:
+            state_idx = env.get_state_idx()
             if random.uniform(0, 1) < eps:
                 action = env.action_space.sample() # Explore action space
             else:
-                action = np.argmax(Q[env.get_state_idx()]) # Exploit learned values
+                action = np.argmax(Q[state_idx]) # Exploit learned values
 
             next_state, reward, done, trunc, info = env.step(action) 
-            total_rewards += reward
 
-            # Sarsa update
-    
+            if last_exp_tuple is not None:
+                last_state_idx, last_action, last_reward = last_exp_tuple
+                Q[last_state_idx, last_action] += alpha * (last_reward + gamma * Q[state_idx, action] - Q[last_state_idx, last_action])
+
+            last_exp_tuple = (state_idx, action, reward)
+
+            total_rewards += reward    
             if reward == 1000:
                 num_success += 1
+                if return_on_success:
+                    return Q, i
 
             state = next_state
             steps += 1
         
-        if i % 10 == 0:
+        if i % 10 == 0 and verbose:
             print(f"Avg return this episode: {total_rewards / steps}")
             print(f"{num_success} successes out of {i+1} episodes")
 
-    return Q
+    return Q, i
