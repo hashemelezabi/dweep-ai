@@ -4,6 +4,7 @@ import pygame
 import numpy as np
 import argparse
 from policy_learning import qlearning
+import time
 
 """
 0: Empty Square
@@ -17,16 +18,44 @@ from policy_learning import qlearning
 8: Freeze Plate
 9: Right Mirror
 10: Left Mirror
+11: Water Bucket
 """
-MAP = np.array([
-    [0, 0, 0, 0, 0, 0, 0, 0, 8, 8],
-    [0, 0, 0, 0, 9, 10, 0, 0, 8, 8],
+
+GO_ABOVE = np.array([
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 9, 0, 0, 10, 0, 0],
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [1, 1, 1, 0, 2, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 9, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [1, 1, 1, 1, 1, 0, 1, 1, 0, 0],
-    [0, 0, 5, 1, 3, 0, 1, 0, 0, 0],
-    [4, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 6, 0, 0],
+])
+
+GO_BELOW = np.array([
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 9, 0, 0, 9, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 2, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 0, 1, 1, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 6, 0, 0],
+])
+
+NEED_DIAGONAL = np.array([
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 9, 0, 0, 9, 0, 0],
+    [0, 0, 0, 4, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 2, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 0, 1, 1, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
     [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
     [0, 0, 0, 1, 0, 0, 1, 6, 0, 0],
 ])
@@ -48,6 +77,58 @@ WALL = 1
 TARGET = 6
 
 IMPASSABLE = [1, 2, 3, 4, 5, 9, 10]
+
+####################################
+####### UTILS #########
+####################################
+
+def get_triangle_points(loc, pix_square_size, laser_gen_dir):
+    """
+    2: Up Laser Generator
+    3: Down Laser Generator
+    4: Right Laser Generator
+    5: Left Laser Generator
+    """
+    if laser_gen_dir == 2:
+        p1 = ((loc[0] + 0.5) * pix_square_size, loc[1] * pix_square_size)
+        p2 = (loc[0] * pix_square_size, (loc[1] + 1) * pix_square_size)
+        p3 = ((loc[0] + 1) * pix_square_size, (loc[1] + 1) * pix_square_size)
+    elif laser_gen_dir == 3:
+        p1 = ((loc[0] + 0.5) * pix_square_size, (loc[1] + 1) * pix_square_size)
+        p2 = tuple(loc * pix_square_size)
+        p3 = ((loc[0] + 1) * pix_square_size, loc[1] * pix_square_size)
+    elif laser_gen_dir == 4:
+        p1 = ((loc[0] + 1) * pix_square_size, (loc[1] + 0.5) * pix_square_size)
+        p2 = tuple(loc * pix_square_size)
+        p3 = (loc[0] * pix_square_size, (loc[1] + 1) * pix_square_size)
+    elif laser_gen_dir == 5:
+        p1 = (loc[0] * pix_square_size, (loc[1] + 0.5) * pix_square_size)
+        p2 = ((loc[0] + 1) * pix_square_size, loc[1] * pix_square_size)
+        p3 = ((loc[0] + 1) * pix_square_size, (loc[1] + 1) * pix_square_size)
+    else:
+        raise ValueError
+
+    return [p1, p2, p3]
+
+def get_mirror_points(loc, d, mirror):
+    """
+    loc: [x, y] of square in Pygame grid
+    d: length of one side of square
+    mirror: whether right (9) or left (10) mirror
+    """
+    if mirror == 9: # Right mirror
+        p1 = ((loc[0] + 0.9) * d, loc[1] * d)
+        p2 = ((loc[0] + 1) * d, (loc[1] + 0.1) * d)
+        p3 = ((loc[0] + 0.1) * d, (loc[1] + 1) * d)
+        p4 = (loc[0] * d, (loc[1] + 0.9) * d)
+    elif mirror == 10:
+        p1 = ((loc[0] + 0.1) * d, loc[1] * d)
+        p2 = (loc[0] * d, (loc[1] + 0.1) * d)
+        p3 = ((loc[0] + 0.9) * d, (loc[1] + 1) * d)
+        p4 = ((loc[0] + 1) * d, (loc[1] + 0.9) * d)
+    else:
+        raise ValueError
+    return [p1, p2, p3, p4]
 
 def get_target_distances(game_map):
     distances = np.full(game_map.shape, 1000)
@@ -82,6 +163,10 @@ def get_target_distances(game_map):
 
     return distances
 
+####################################
+####### END UTILS #########
+####################################
+
 class DweepEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
@@ -109,7 +194,7 @@ class DweepEnv(gym.Env):
             }
         )
 
-        self.num_states = size * size * size * size * 2
+        self.num_states = size * size * size * size * 3
 
         # We have 4 actions, corresponding to "right", "up", "left", "down"
         # We have 4 more actions corresponding to diagonal movement (8 total)
@@ -147,7 +232,8 @@ class DweepEnv(gym.Env):
         self.initial_target_location = self.find_target(game_map)
         self.base_map = game_map.copy()
         self.game_map = game_map.copy() # This map can change
-        self.laser_map = np.full((game_map.shape[0], game_map.shape[1]), False) # Keeps track of laser paths
+        self.laser_map = np.zeros(self.game_map.shape) # Keeps track of laser paths
+        self.laser_is_vertical = np.zeros(self.game_map.shape) # Used for visualizing the laser
         self.update_lasers()
 
     def reset(self, seed=None, options=None):
@@ -155,7 +241,7 @@ class DweepEnv(gym.Env):
         super().reset(seed=seed)
 
         self._agent_location = np.array([0, 0]) # Top-left
-        self._cursor_location = np.array([1, 1]) # Top-left
+        self._cursor_location = np.array([0, 0]) # Top-left
         self._target_location = self.initial_target_location
         self._mirror_placed = 0
 
@@ -175,11 +261,11 @@ class DweepEnv(gym.Env):
 
         if action >= 12:
             # mirror placement case
-            if not self._mirror_placed and not np.array_equal(self._cursor_location, self._agent_location) and not np.array_equal(self._cursor_location, self._target_location):
+            if self._mirror_placed == 0 and not np.array_equal(self._cursor_location, self._agent_location) and not np.array_equal(self._cursor_location, self._target_location):
                 # print("laser map: ", self.laser_map[self._cursor_location[0], self._cursor_location[1]])
                 if self.game_map[self._cursor_location[0], self._cursor_location[1]] == 0 and self.laser_map[self._cursor_location[0], self._cursor_location[1]] == True:
                     self._mirror_placed = action - 12 + 1
-                    if action - 12 == 0:
+                    if action == 12:
                         self.game_map[self._cursor_location[0], self._cursor_location[1]] = 9
                     else:
                         self.game_map[self._cursor_location[0], self._cursor_location[1]] = 10
@@ -308,58 +394,59 @@ class DweepEnv(gym.Env):
         )
 
         # Draw the walls, laser, laser generator, and freeze plates
-        # TODO: Remove this hardcoded size
-        for i in range(10):
-            for j in range(10):
-                loc = np.array([i, j])
+        for i in range(self.size):
+            for j in range(self.size):
+                loc = np.array([j, i]) # Flip it to match coordinate system of PyGame
                 if self.game_map[i, j] == 1: # Draw wall
                     pygame.draw.rect(
                         canvas,
                         (0, 0, 0),
                         pygame.Rect(
-                            pix_square_size * np.flip(loc),
+                            pix_square_size * loc,
                             (pix_square_size, pix_square_size),
                         ),
                     )
-                elif self.game_map[i, j] == 2: # Draw laser generator
-                    pygame.draw.rect(
+                elif self.game_map[i, j] in [2, 3, 4, 5]: # Draw laser generator
+                    pygame.draw.polygon(
                         canvas,
                         (0, 0, 255),
-                        pygame.Rect(
-                            pix_square_size * np.flip(loc),
-                            (pix_square_size, pix_square_size),
-                        ),
+                        get_triangle_points(loc, pix_square_size, self.game_map[i, j])
                     )
                 elif self.game_map[i, j] == 8: # Draw freeze plate
                     pygame.draw.rect(
                         canvas,
                         (0, 100, 100),
                         pygame.Rect(
-                            pix_square_size * np.flip(loc),
+                            pix_square_size * loc,
                             (pix_square_size, pix_square_size),
                         )
                     )
+
+                # Draw laser beam
                 if self.laser_map[i, j]:
+                    if self.laser_is_vertical[i, j]:
+                        topleft = ((loc[0] + 0.4) * pix_square_size, loc[1] * pix_square_size)
+                        dim = (pix_square_size * 0.2, pix_square_size)
+                    else:
+                        topleft = (loc[0] * pix_square_size, (loc[1] + 0.4) * pix_square_size)
+                        dim = (pix_square_size, pix_square_size * 0.2)
                     pygame.draw.rect(
                         canvas,
                         (0, 255, 0),
                         pygame.Rect(
-                            pix_square_size * np.flip(loc + 0.25),
-                            (pix_square_size / 2, pix_square_size),
+                            topleft,
+                            dim,
                         )
                     )
-                # Commenting out the old code for drawing lasers
-                """
-                elif self.game_map[i, j] == 3: # Draw laser
-                    pygame.draw.rect(
+
+                # Draw mirror
+                if self.game_map[i, j] in [9, 10]:
+                    silver_color = (192, 192, 192)
+                    pygame.draw.polygon(
                         canvas,
-                        (0, 255, 0),
-                        pygame.Rect(
-                            pix_square_size * np.flip(loc + 0.25),
-                            (pix_square_size / 2, pix_square_size),
-                        ),
+                        silver_color,
+                        get_mirror_points(loc, pix_square_size, self.game_map[i, j]),
                     )
-                """
         
         # Finally, add some gridlines
         for x in range(self.size + 1):
@@ -413,13 +500,19 @@ class DweepEnv(gym.Env):
 
     # Helper method to update laser paths
     def update_lasers(self):
+        self.laser_map = np.zeros(self.game_map.shape) # Keeps track of laser paths
+        self.laser_is_vertical = np.zeros(self.game_map.shape) # Used for visualizing the laser
+
         direction = np.array([0, 0])
         for row in range(self.game_map.shape[0]):
             for col in range(self.game_map.shape[1]):
+                is_vertical = 0
                 if self.game_map[row][col] == 2:
                     direction = np.array([-1, 0])
+                    is_vertical = 1
                 elif self.game_map[row][col] == 3:
                     direction = np.array([1, 0])
+                    is_vertical = 1
                 elif self.game_map[row][col] == 4:
                     direction = np.array([0, 1])
                 elif self.game_map[row][col] == 5:
@@ -434,16 +527,22 @@ class DweepEnv(gym.Env):
                     if self.game_map[loc[0]][loc[1]] == 1:
                         break
                     elif self.game_map[loc[0]][loc[1]] in [2, 3, 4, 5]:
-                        self.laser_map[loc[0]][loc[1]] = True
+                        self.laser_map[loc[0]][loc[1]] = 1
+                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
                         break
-                    elif self.game_map[loc[0]][loc[1]] == 9:
-                        self.laser_map[loc[0]][loc[1]] = True
+                    elif self.game_map[loc[0]][loc[1]] == 9: # Right mirror
+                        self.laser_map[loc[0]][loc[1]] = 1
+                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
                         direction = np.array([direction[1] * -1, direction[0] * -1])
+                        is_vertical = 0 if is_vertical else 1 # Invert is_vertical, since we hit a mirror
                     elif self.game_map[loc[0]][loc[1]] == 10:
-                        self.laser_map[loc[0]][loc[1]] = True
+                        self.laser_map[loc[0]][loc[1]] = 1
+                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
                         direction = np.array([direction[1], direction[0]])
+                        is_vertical = 0 if is_vertical else 1 # Invert is_vertical, since we hit a mirror
                     else:
-                        self.laser_map[loc[0]][loc[1]] = True
+                        self.laser_map[loc[0]][loc[1]] = 1
+                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
                     loc += direction
                 
 if __name__ == '__main__':
@@ -458,7 +557,7 @@ if __name__ == '__main__':
 
     if args.qlearning:
         Q = qlearning(DweepEnv(game_map, size=10, augment_rewards=args.augment_rewards), 
-        episodes=100000, alpha=0.1, gamma=0.95, eps=0.2)
+        episodes=5000, alpha=0.1, gamma=0.95, eps=0.2)
 
     env = DweepEnv(game_map, render_mode="human", size=10, augment_rewards=args.augment_rewards)
     env.reset()
@@ -468,6 +567,13 @@ if __name__ == '__main__':
         else:
             action = np.argmax(Q[env.get_state_idx()])
 
-        observation, reward, _, _, _ = env.step(action)
+    # Visualize learned policy
+    done = False
+    while not done:
+        action = np.argmax(Q[env.get_state_idx()])
+        next_state, reward, done, _, _ = env.step(action)
+
+    # Keep visualization for a few seconds for human watching
+    time.sleep(10)
 
     env.close()
