@@ -191,6 +191,8 @@ class DweepEnv(gym.Env):
                 "agent": spaces.Box(0, size - 1, shape=(2,), dtype=int),
                 "cursor": spaces.Box(0, size - 1, shape=(2,), dtype=int),
                 "mirror_placed": spaces.Discrete(3),
+                "wet": spaces.Discrete(2),
+                "has_bucket": spaces.Discrete(2),
             }
         )
 
@@ -486,12 +488,13 @@ class DweepEnv(gym.Env):
             obs = state[0] if isinstance(state, tuple) else state
 
         x, y = obs['agent'][0], obs['agent'][1]
-
         cursor_x, cursor_y = obs['cursor'][0], obs['cursor'][1]
 
         mirror_placed = obs['mirror_placed']
+        is_wet = obs['wet']
+        has_bucket = obs['has_bucket']
 
-        return np.ravel_multi_index((x, y, cursor_x, cursor_y, mirror_placed), (self.size, self.size, self.size, self.size, 3))
+        return np.ravel_multi_index((x, y, cursor_x, cursor_y, mirror_placed, is_wet, has_bucket), (self.size, self.size, self.size, self.size, 3, 2, 2))
 
     def close(self):
         if self.window is not None:
