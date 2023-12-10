@@ -31,6 +31,19 @@ MAP = np.array([
     [0, 0, 0, 1, 0, 0, 1, 6, 0, 0],
 ])
 
+HARD_MAP = np.array([
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 2, 0, 0, 0, 0, 0, 0, 6, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+])
+
 WALL = 1
 TARGET = 6
 
@@ -69,34 +82,38 @@ def get_target_distances(game_map):
 
     return distances
 
-
 class DweepEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, size=5, augment_rewards=False):
+    def find_target(self, game_map):
+        for i in range(game_map.shape[0]):
+            for j in range(game_map.shape[1]):
+                if game_map[i, j] == 6:
+                    return np.array([i, j])
+
+    def __init__(self, game_map, render_mode=None, size=5, augment_rewards=False):
         self.size = size  # The size of the square grid
         self.window_size = 520  # The size of the PyGame window
 
         # handle reward augmentation
         self.augment_rewards = augment_rewards
-        self.distances = get_target_distances(MAP)
-
-        print(self.distances)
+        self.distances = get_target_distances(game_map)
 
         # Observations are dictionaries with the agent's and the target's location.
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
         self.observation_space = spaces.Dict(
             {
                 "agent": spaces.Box(0, size - 1, shape=(2,), dtype=int),
-                "target": spaces.Box(0, size - 1, shape=(2,), dtype=int),
+                "cursor": spaces.Box(0, size - 1, shape=(2,), dtype=int),
+                "mirror_placed": spaces.Discrete(3),
             }
         )
 
-        self.num_states = size * size * 2
+        self.num_states = size * size * size * size * 2
 
         # We have 4 actions, corresponding to "right", "up", "left", "down"
         # We have 4 more actions corresponding to diagonal movement (8 total)
-        self.action_space = spaces.Discrete(8)
+        self.action_space = spaces.Discrete(8 + 4 + 2)
 
         """
         The following dictionary maps abstract actions from `self.action_space` to 
@@ -127,8 +144,10 @@ class DweepEnv(gym.Env):
         self.window = None
         self.clock = None
 
-        self.game_map = MAP.copy() # This map can change
-        self.laser_map = np.full((MAP.shape[0], MAP.shape[1]), False) # Keeps track of laser paths
+        self.initial_target_location = self.find_target(game_map)
+        self.base_map = game_map.copy()
+        self.game_map = game_map.copy() # This map can change
+        self.laser_map = np.full((game_map.shape[0], game_map.shape[1]), False) # Keeps track of laser paths
         self.update_lasers()
 
     def reset(self, seed=None, options=None):
@@ -136,7 +155,11 @@ class DweepEnv(gym.Env):
         super().reset(seed=seed)
 
         self._agent_location = np.array([0, 0]) # Top-left
-        self._target_location = np.array([9, 7]) # In bottom-right corner
+        self._cursor_location = np.array([1, 1]) # Top-left
+        self._target_location = self.initial_target_location
+        self._mirror_placed = 0
+
+        self.game_map = self.base_map.copy()
 
         observation = self._get_obs()
         info = self._get_info()
@@ -147,41 +170,83 @@ class DweepEnv(gym.Env):
         return observation, info
     
     def step(self, action):
-        # Map the action (element of {0,1,2,3,4,5,6,7}) to the direction we walk in
-        direction = self._action_to_direction[action]
-        # We use `np.clip` to make sure we don't leave the grid
-        new_location = np.clip(
-            self._agent_location + direction, 0, self.size - 1
-        )
+        reward = 0
+        terminated = False
 
-        x, y = new_location
+        if action >= 12:
+            # mirror placement case
+            if not self._mirror_placed and not np.array_equal(self._cursor_location, self._agent_location) and not np.array_equal(self._cursor_location, self._target_location):
+                # print("laser map: ", self.laser_map[self._cursor_location[0], self._cursor_location[1]])
+                if self.game_map[self._cursor_location[0], self._cursor_location[1]] == 0 and self.laser_map[self._cursor_location[0], self._cursor_location[1]] == True:
+                    self._mirror_placed = action - 12 + 1
+                    if action - 12 == 0:
+                        self.game_map[self._cursor_location[0], self._cursor_location[1]] = 9
+                    else:
+                        self.game_map[self._cursor_location[0], self._cursor_location[1]] = 10
 
-        # Check for laser beam collision
+                    self.update_lasers()
 
+                    if self.augment_rewards:
+                        print("good mirror placement: ", self._cursor_location)
+                        reward += 0.2
+            else:
+                print("bad mirror placement")
+                if self.augment_rewards:
+                    reward = -0.1
 
-        if self.game_map[x, y] in [1, 2, 3, 4, 5, 9, 10]:
-            # This is a wall or laser generator or mirror, so we stay at old location
-            reward = 0
-            terminated = False
-        elif self.laser_map[x, y]:
-            # This is a laser, so we die
-            self._agent_location = new_location
-            reward = -1
-            terminated = True
-        elif self.game_map[x, y] in [0, 8]:
-            # Dweep moves to a new square
-            self._agent_location = new_location
-            reward = 0
-            terminated = False
-        elif self.game_map[x, y] == 6:
-            self._agent_location = new_location
-            reward = 1 # Binary sparse rewards
-            terminated = True
+        elif action >= 8:
+            # cursor move case
+            if self._mirror_placed == 0:
+                direction = self._action_to_direction[action - 8]
+                new_cursor_location = np.clip(
+                    self._cursor_location + direction, 0, self.size - 1
+                )
+
+                # print("cursor move", self._cursor_location, new_cursor_location)
+                if self.augment_rewards and (np.array_equal(new_cursor_location, self._agent_location) or np.array_equal(new_cursor_location, self._cursor_location)):
+                    print("bad cursor move")
+                    reward = -0.01
+
+                self._cursor_location = new_cursor_location
+            else:
+                # can't move cursor, as this represents a mirror placement
+                if self.augment_rewards:
+                    reward = -0.01
         else:
-            raise ValueError("Invalid entry in map")
+            # Map the action (element of {0,1,2,3,4,5,6,7}) to the direction we walk in
+            direction = self._action_to_direction[action]
+            # We use `np.clip` to make sure we don't leave the grid
+            new_location = np.clip(
+                self._agent_location + direction, 0, self.size - 1
+            )
 
-        if self.augment_rewards:
-            reward += 0.01 * -self.distances[new_location[0], new_location[1]]
+            x, y = new_location
+
+            # Check for laser beam collision
+            if self.game_map[x, y] in [1, 2, 3, 4, 5, 9, 10]:
+                # This is a wall or laser generator or mirror, so we stay at old location
+                reward = 0
+                terminated = False
+            elif self.laser_map[x, y]:
+                # This is a laser, so we die
+                self._agent_location = new_location
+                reward = -1
+                print("laser death")
+                terminated = True
+            elif self.game_map[x, y] in [0, 8]:
+                # Dweep moves to a new square
+                self._agent_location = new_location
+                reward = 0
+                terminated = False
+            elif self.game_map[x, y] == 6:
+                self._agent_location = new_location
+                reward = 1000 # Binary sparse rewards
+                terminated = True
+            else:
+                raise ValueError("Invalid entry in map")
+
+            if self.augment_rewards:
+                reward += 0.01 * -self.distances[new_location[0], new_location[1]]
 
         observation = self._get_obs()
         info = self._get_info()
@@ -192,7 +257,8 @@ class DweepEnv(gym.Env):
         return observation, reward, terminated, False, info
 
     def _get_obs(self):
-        return {"agent": self._agent_location, "target": self._target_location}
+        return {"agent": self._agent_location, "target": self._target_location, "cursor": self._cursor_location, 
+                "mirror_placed": self._mirror_placed}
     
     def _get_info(self):
         return {}
@@ -230,6 +296,14 @@ class DweepEnv(gym.Env):
             canvas,
             (255, 0, 255),
             (np.flip(self._agent_location) + 0.5) * pix_square_size,
+            pix_square_size / 3,
+        )
+
+        # Now we draw the cursor
+        pygame.draw.circle(
+            canvas,
+            (0, 0, 0),
+            (np.flip(self._cursor_location) + 0.5) * pix_square_size,
             pix_square_size / 3,
         )
 
@@ -325,11 +399,13 @@ class DweepEnv(gym.Env):
             obs = state[0] if isinstance(state, tuple) else state
 
         x, y = obs['agent'][0], obs['agent'][1]
-        i = x * self.size + y
-        if np.array_equal(obs['target'], np.array([0, 7])):
-            i += 100 # If it's the other possible target location
-        return i
-   
+
+        cursor_x, cursor_y = obs['cursor'][0], obs['cursor'][1]
+
+        mirror_placed = obs['mirror_placed']
+
+        return np.ravel_multi_index((x, y, cursor_x, cursor_y, mirror_placed), (self.size, self.size, self.size, self.size, 3))
+
     def close(self):
         if self.window is not None:
             pygame.display.quit()
@@ -378,16 +454,15 @@ if __name__ == '__main__':
     parser.add_argument('--qlearning', '-q', action='store_true')
     args = parser.parse_args()
 
+    game_map = HARD_MAP
+
     if args.qlearning:
-        Q = qlearning(DweepEnv(size=10, augment_rewards=args.augment_rewards), 
-        episodes=1000, alpha=0.1, gamma=0.95, eps=0.2)
-        print(np.max(Q, axis=1))
-        print(np.max(Q, axis=1).shape)
+        Q = qlearning(DweepEnv(game_map, size=10, augment_rewards=args.augment_rewards), 
+        episodes=100000, alpha=0.1, gamma=0.95, eps=0.2)
 
-
-    env = DweepEnv(render_mode="human", size=10, augment_rewards=args.augment_rewards)
+    env = DweepEnv(game_map, render_mode="human", size=10, augment_rewards=args.augment_rewards)
     env.reset()
-    for _ in range(1000):
+    for _ in range(30000):
         if not args.qlearning:
             action = env.action_space.sample()  # take a random action
         else:
