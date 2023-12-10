@@ -12,7 +12,6 @@ from policy_learning import qlearning
 3: Down Laser Generator
 4: Right Laser Generator
 5: Left Laser Generator
-3 (temp): Laser Beam
 6: Target
 7: Bomb
 8: Freeze Plate
@@ -92,6 +91,8 @@ class DweepEnv(gym.Env):
                 "target": spaces.Box(0, size - 1, shape=(2,), dtype=int),
             }
         )
+
+        self.num_states = size * size * 2
 
         # We have 4 actions, corresponding to "right", "up", "left", "down"
         # We have 4 more actions corresponding to diagonal movement (8 total)

@@ -1,3 +1,4 @@
+import argparse
 import gym
 from gym import spaces
 import pygame
@@ -17,13 +18,49 @@ MAP = np.array([
     [0, 0, 0, 1, 0, 0, 1, 4, 0, 0],
 ])
 
+TARGET = 4
+IMPASSABLE = [1, 2]
+
+def get_target_distances(game_map):
+    distances = np.full(game_map.shape, 1000)
+    index_target = np.where(game_map == TARGET)
+
+    distances[index_target] = 0
+
+    while True:
+        old_distances = distances.copy()
+        for i in range(game_map.shape[0]):
+            for j in range(game_map.shape[1]):
+                square = game_map[i, j]
+                
+                if square in IMPASSABLE:
+                    continue
+
+                distances[i, j] = min(
+                    old_distances[np.clip(i + 1, 0, game_map.shape[0] - 1), j] + 1,
+                    old_distances[np.clip(i - 1, 0, game_map.shape[0] - 1), j] + 1,
+                    old_distances[i, np.clip(j + 1, 0, game_map.shape[1] - 1)] + 1,
+                    old_distances[i, np.clip(j - 1, 0, game_map.shape[1] - 1)] + 1,
+                    old_distances[i, j],
+                )
+
+        if np.all(old_distances == distances):
+            break
+
+    return distances
+
 
 class DweepEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, size=5):
+    def __init__(self, render_mode=None, size=5, augment=False):
         self.size = size  # The size of the square grid
         self.window_size = 520  # The size of the PyGame window
+
+        self.augment = augment
+        if augment:
+            self.distances = get_target_distances(MAP)
+
 
         # Observations are dictionaries with the agent's and the target's location.
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
@@ -119,6 +156,9 @@ class DweepEnv(gym.Env):
             terminated = True
         else:
             raise ValueError("Invalid entry in map")
+
+        if self.augment:
+            reward += 0.01 * -self.distances[new_location[0], new_location[1]]
 
         observation = self._get_obs()
         info = self._get_info()
@@ -239,9 +279,9 @@ class DweepEnv(gym.Env):
             pygame.display.quit()
             pygame.quit()
 
-def main():
+def main(augment_rewards):
     # env = DweepEnv(render_mode="human", size=10)
-    env = DweepEnv(size=10)
+    env = DweepEnv(size=10, augment=augment_rewards)
 
     num_states = 200
     num_actions = 4
@@ -251,7 +291,7 @@ def main():
     gamma = 0.95
     eps = 0.1
 
-    episodes = 1000
+    episodes = 200
     num_success = 0
     state = env.reset()
 
@@ -290,13 +330,26 @@ def main():
             print(f"Avg return this episode: {total_rewards / steps}")
             print(f"{num_success} successes out of {i+1} episodes")
 
+    env = DweepEnv(render_mode="human", size=10)
+    env.reset()
+    for _ in range(1000):
+        action = np.argmax(Q[env.get_state_idx()])
+        observation, reward, _, _, _ = env.step(action)
+
+    env.close()
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    # parser.add_argument('--render', action='store_true')
+    parser.add_argument('--augment_rewards', '-a', action='store_true')
+    # parser.add_argument('--qlearning', '-q', action='store_true')
+    args = parser.parse_args()
+
     # env = DweepEnv(render_mode="human", size=10)
     # env.reset()
     # for _ in range(1000):
     #     action = env.action_space.sample()  # take a random action
     #     env.step(action)
     # env.close()
-    main()
+    main(args.augment_rewards)

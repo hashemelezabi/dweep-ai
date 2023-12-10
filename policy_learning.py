@@ -2,9 +2,8 @@ import numpy as np
 import random
 
 def qlearning(env, alpha, gamma, eps, episodes=1000):
-    # TODO why don't we get these from the environment?
-    num_states = 200
-    num_actions = 8
+    num_states = env.num_states
+    num_actions = env.action_space.n
     
     Q = np.zeros((num_states, num_actions))
 
