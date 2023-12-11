@@ -3,9 +3,8 @@ from gym import spaces
 import pygame
 import numpy as np
 import argparse
-from policy_learning import qlearning, sarsa
+from policy_learning import qlearning
 import time
-from pygame import image as pyg_image
 
 """
 0: Empty Square
@@ -20,6 +19,7 @@ from pygame import image as pyg_image
 9: Right Mirror
 10: Left Mirror
 11: Water Bucket
+12: Torch
 """
 
 GO_ABOVE = np.array([
@@ -87,6 +87,35 @@ ORDERING_MAP = np.array([
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 ])
 
+ICE_ONLY_MAP = np.array([
+    [0, 0, 0, 8, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 8, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 8, 0, 0, 0, 0, 0, 0],
+    [12, 0, 0, 8, 0, 0, 0, 0, 6, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+])
+
+level1 = {
+    "map": np.array([
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 9, 0, 0, 9, 0, 0],
+        [0, 0, 0, 4, 0, 0, 0, 0, 0, 0],
+        [1, 1, 1, 0, 2, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [1, 1, 1, 1, 1, 0, 1, 1, 0, 0],
+        [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 1, 6, 0, 0],
+    ]),
+    "start_pos": np.array([1, 9])
+}
+
 ####################################
 ####### UTILS #########
 ####################################
@@ -104,9 +133,10 @@ class Tiles:
     LMIRROR = 9
     RMIRROR = 10
     BUCKET = 11
+    TORCH = 12
 
     IMPASSABLE = [WALL, ULASER, DLASER, RLASER, LLASER, LMIRROR, RMIRROR]
-    PASSABLE = [EMPTY, TARGET, BOMB, FREEZE, BUCKET]
+    PASSABLE = [EMPTY, TARGET, BOMB, FREEZE, BUCKET, TORCH]
 
 
 def get_triangle_points(loc, pix_square_size, laser_gen_dir):
@@ -203,7 +233,7 @@ class DweepEnv(gym.Env):
                 if game_map[i, j] == 6:
                     return np.array([i, j])
 
-    def __init__(self, game_map, render_mode=None, size=5, augment_rewards=False):
+    def __init__(self, game_map, start_pos=None, render_mode=None, size=5, augment_rewards=False):
         self.size = size  # The size of the square grid
         self.window_size = 520  # The size of the PyGame window
 
@@ -220,14 +250,16 @@ class DweepEnv(gym.Env):
                 "mirror_placed": spaces.Discrete(3),
                 "wet": spaces.Discrete(2),
                 "has_bucket": spaces.Discrete(3),
+                "frozen": spaces.Discrete(2),
+                "has_torch": spaces.Discrete(3),
             }
         )
 
-        self.num_states = size * size * size * size * 3 * 2 * 3
+        self.num_states = (size ** 2) * (size ** 2) * 3 * 2 * 3 * 2 * 3
 
-        # We have 4 actions, corresponding to "right", "up", "left", "down"
-        # We have 4 more actions corresponding to diagonal movement (8 total)
-        self.action_space = spaces.Discrete(8 + 4 + 2 + 1)
+        # 8 movement actions, 4 cursor movement actions, 2 mirror actions (place left or right),
+        # 1 bucket action (apply), 1 torch action (apply).
+        self.action_space = spaces.Discrete(8 + 4 + 2 + 1 + 1)
 
         """
         The following dictionary maps abstract actions from `self.action_space` to 
@@ -258,6 +290,7 @@ class DweepEnv(gym.Env):
         self.window = None
         self.clock = None
 
+        self.initial_agent_location = start_pos or np.array([0, 0]) # (0, 0) by default if no start_pos is given
         self.initial_target_location = self.find_target(game_map)
         self.base_map = game_map.copy()
         self.game_map = game_map.copy() # This map can change
@@ -269,12 +302,14 @@ class DweepEnv(gym.Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
-        self._agent_location = np.array([0, 0]) # Top-left
-        self._cursor_location = np.array([0, 0]) # Top-left
+        self._agent_location = self.initial_agent_location.copy()
+        self._cursor_location = self._agent_location.copy()
         self._target_location = self.initial_target_location
         self._mirror_placed = 0
         self._wet = 0
         self._has_bucket = 0
+        self._frozen = 0
+        self._has_torch = 0
 
         self.game_map = self.base_map.copy()
 
@@ -290,10 +325,28 @@ class DweepEnv(gym.Env):
         reward = 0
         terminated = False
 
-        if action == 14:
+        if action == 15:
+            # torch case
+            if self._has_torch == 1:
+                if self._frozen == 0 and self._wet == 0:
+                    reward = -10
+                    print("torch death")
+                    terminated = True
+                elif self._frozen == 1:
+                    print("used torch to free from ice")
+                    self._frozen = 0
+                    self._has_torch = 2
+                    self._wet = 1
+                    if self.augment_rewards:
+                        reward = 1
+                else:
+                    if self.augment_rewards:
+                        reward = -0.1 # Useless to apply torch when wet
+
+        elif action == 14:
             # water bucket case
             if self._has_bucket == 1 and self._wet == 0:
-                # print("used water bucket")
+                print("used water bucket")
                 self._wet = 1
                 self._has_bucket = 2
                 if self.augment_rewards:
@@ -301,6 +354,7 @@ class DweepEnv(gym.Env):
             else:
                 if self.augment_rewards:
                     reward = -0.1
+
         elif action >= 12:
             # mirror placement case
             if self._mirror_placed == 0 and not np.array_equal(self._cursor_location, self._agent_location) and not np.array_equal(self._cursor_location, self._target_location):
@@ -309,16 +363,16 @@ class DweepEnv(gym.Env):
                     self._mirror_placed = action - 12 + 1
                     if action == 12:
                         self.game_map[self._cursor_location[0], self._cursor_location[1]] = Tiles.LMIRROR
-                    elif action == 13:
+                    else:
                         self.game_map[self._cursor_location[0], self._cursor_location[1]] = Tiles.RMIRROR
 
                     self.update_lasers()
 
                     if self.augment_rewards:
-                        # print("good mirror placement: ", self._cursor_location)
+                        print("good mirror placement: ", self._cursor_location)
                         reward += 0.2
             else:
-                # print("bad mirror placement")
+                print("bad mirror placement")
                 if self.augment_rewards:
                     reward = -0.1
 
@@ -332,7 +386,7 @@ class DweepEnv(gym.Env):
 
                 # print("cursor move", self._cursor_location, new_cursor_location)
                 if self.augment_rewards and (np.array_equal(new_cursor_location, self._agent_location) or np.array_equal(new_cursor_location, self._cursor_location)):
-                    # print("bad cursor move")
+                    print("bad cursor move")
                     reward = -0.01
 
                 self._cursor_location = new_cursor_location
@@ -351,38 +405,48 @@ class DweepEnv(gym.Env):
             x, y = new_location
 
             # Check for laser beam collision
-            if self.game_map[x, y] in Tiles.IMPASSABLE:
+            if self.game_map[x, y] in Tiles.IMPASSABLE or self._frozen:
                 # This is a wall or laser generator or mirror, so we stay at old location
+                # Also stay at location if frozen.
                 reward = 0
                 terminated = False
-            elif self.laser_map[x, y]:
-                # This is a laser, so we die
+                if self._frozen and self.augment_rewards:
+                    reward = -0.1 # Not applying torch while frozen
+            elif self.laser_map[x, y] and self.game_map[x, y] != Tiles.FREEZE:
+                # This is a laser, so we die (unless wet or this is a freeze tile).
                 if not self._wet:
                     self._agent_location = new_location
                     reward = -1
-                    # print("laser death")
+                    print("laser death")
                     terminated = True
                 else:
                     self._agent_location = new_location
                     reward = 0
                     terminated = False
                     self._wet = 0
-            elif self.game_map[x, y] in [0, 8, Tiles.BUCKET]:
+            elif self.game_map[x, y] in [Tiles.EMPTY, Tiles.FREEZE, Tiles.BUCKET, Tiles.TORCH]:
                 # Dweep moves to a new square
                 self._agent_location = new_location
-                
+                reward = 0
                 if self.game_map[x, y] == Tiles.BUCKET:
-                    # print("picked up water bucket")
+                    print("picked up water bucket")
                     self._has_bucket = 1
                     self.game_map[x, y] = 0
                     if self.augment_rewards:
                         reward = 0.1
-
-                reward = 0
+                elif self.game_map[x, y] == Tiles.TORCH:
+                    print("picked up torch")
+                    self._has_torch = 1
+                    self.game_map[x, y] = 0
+                    if self.augment_rewards:
+                        reward = 0.1
+                elif self.game_map[x, y] == Tiles.FREEZE:
+                    print("got frozen")
+                    self._frozen = 1
                 terminated = False
             elif self.game_map[x, y] == Tiles.TARGET:
                 self._agent_location = new_location
-                reward = 1000 # Binary sparse rewards
+                reward = 1000
                 terminated = True
             else:
                 raise ValueError("Invalid entry in map")
@@ -400,7 +464,8 @@ class DweepEnv(gym.Env):
 
     def _get_obs(self):
         return {"agent": self._agent_location, "target": self._target_location, "cursor": self._cursor_location, 
-                "mirror_placed": self._mirror_placed, "wet": self._wet, "has_bucket": self._has_bucket}
+                "mirror_placed": self._mirror_placed, "wet": self._wet, "has_bucket": self._has_bucket,
+                "frozen": self._frozen, "has_torch": self._has_torch}
     
     def _get_info(self):
         return {}
@@ -409,6 +474,73 @@ class DweepEnv(gym.Env):
     def render(self):
         if self.render_mode == "rgb_array":
             return self._render_frame()
+
+    def get_state_idx(self, state=None):
+        if state is None:
+            obs = self._get_obs()
+        else:
+            obs = state[0] if isinstance(state, tuple) else state
+
+        x, y = obs['agent'][0], obs['agent'][1]
+        cursor_x, cursor_y = obs['cursor'][0], obs['cursor'][1]
+
+        mirror_placed = obs['mirror_placed']
+        is_wet = obs['wet']
+        has_bucket = obs['has_bucket']
+        is_frozen = obs['frozen']
+        has_torch = obs['has_torch']
+
+        return np.ravel_multi_index((
+            x, y, cursor_x, cursor_y, mirror_placed, is_wet, has_bucket, is_frozen, has_torch),
+            (self.size, self.size, self.size, self.size, 3, 2, 3, 2, 3
+        ))
+
+    # Helper method to update laser paths
+    def update_lasers(self):
+        self.laser_map = np.zeros(self.game_map.shape) # Keeps track of laser paths
+        self.laser_is_vertical = np.zeros(self.game_map.shape) # Used for visualizing the laser
+
+        direction = np.array([0, 0])
+        for row in range(self.game_map.shape[0]):
+            for col in range(self.game_map.shape[1]):
+                is_vertical = 0
+                if self.game_map[row][col] == 2:
+                    direction = np.array([-1, 0])
+                    is_vertical = 1
+                elif self.game_map[row][col] == 3:
+                    direction = np.array([1, 0])
+                    is_vertical = 1
+                elif self.game_map[row][col] == 4:
+                    direction = np.array([0, 1])
+                elif self.game_map[row][col] == 5:
+                    direction = np.array([0, -1])
+                else:
+                    continue
+                # Following code only executes if the object is a laser generator
+                # Trace the laser's path until it hits a wall, changing direction at mirrors
+                loc = np.array([row, col])
+                loc += direction
+                while (loc[0] < self.laser_map.shape[0] and loc[0] >= 0 and loc[1] < self.laser_map.shape[1] and loc[1] >= 0):
+                    if self.game_map[loc[0]][loc[1]] == 1:
+                        break
+                    elif self.game_map[loc[0]][loc[1]] in [2, 3, 4, 5]:
+                        self.laser_map[loc[0]][loc[1]] = 1
+                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
+                        break
+                    elif self.game_map[loc[0]][loc[1]] == 9: # Right mirror
+                        self.laser_map[loc[0]][loc[1]] = 1
+                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
+                        direction = np.array([direction[1] * -1, direction[0] * -1])
+                        is_vertical = 0 if is_vertical else 1 # Invert is_vertical, since we hit a mirror
+                    elif self.game_map[loc[0]][loc[1]] == 10:
+                        self.laser_map[loc[0]][loc[1]] = 1
+                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
+                        direction = np.array([direction[1], direction[0]])
+                        is_vertical = 0 if is_vertical else 1 # Invert is_vertical, since we hit a mirror
+                    else:
+                        self.laser_map[loc[0]][loc[1]] = 1
+                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
+                    loc += direction
 
     def _render_frame(self):
         if self.window is None and self.render_mode == "human":
@@ -471,7 +603,7 @@ class DweepEnv(gym.Env):
                 elif self.game_map[i, j] == 8: # Draw freeze plate
                     pygame.draw.rect(
                         canvas,
-                        (0, 100, 100),
+                        (0, 100, 100, 0.5),
                         pygame.Rect(
                             pix_square_size * loc,
                             (pix_square_size, pix_square_size),
@@ -481,6 +613,15 @@ class DweepEnv(gym.Env):
                     pygame.draw.rect(
                         canvas,
                         (50, 50, 255),
+                        pygame.Rect(
+                            pix_square_size * loc,
+                            (pix_square_size, pix_square_size),
+                        )
+                    )
+                elif self.game_map[i, j] == Tiles.BUCKET and self._has_bucket == 0: # Draw torch 
+                    pygame.draw.rect(
+                        canvas,
+                        (255, 0, 0),
                         pygame.Rect(
                             pix_square_size * loc,
                             (pix_square_size, pix_square_size),
@@ -544,72 +685,10 @@ class DweepEnv(gym.Env):
                 np.array(pygame.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
             )
 
-    def get_state_idx(self, state=None):
-        if state is None:
-            obs = self._get_obs()
-        else:
-            obs = state[0] if isinstance(state, tuple) else state
-
-        x, y = obs['agent'][0], obs['agent'][1]
-        cursor_x, cursor_y = obs['cursor'][0], obs['cursor'][1]
-
-        mirror_placed = obs['mirror_placed']
-        is_wet = obs['wet']
-        has_bucket = obs['has_bucket']
-
-        return np.ravel_multi_index((x, y, cursor_x, cursor_y, mirror_placed, is_wet, has_bucket), (self.size, self.size, self.size, self.size, 3, 2, 3))
-
     def close(self):
         if self.window is not None:
             pygame.display.quit()
             pygame.quit()
-
-    # Helper method to update laser paths
-    def update_lasers(self):
-        self.laser_map = np.zeros(self.game_map.shape) # Keeps track of laser paths
-        self.laser_is_vertical = np.zeros(self.game_map.shape) # Used for visualizing the laser
-
-        direction = np.array([0, 0])
-        for row in range(self.game_map.shape[0]):
-            for col in range(self.game_map.shape[1]):
-                is_vertical = 0
-                if self.game_map[row][col] == 2:
-                    direction = np.array([-1, 0])
-                    is_vertical = 1
-                elif self.game_map[row][col] == 3:
-                    direction = np.array([1, 0])
-                    is_vertical = 1
-                elif self.game_map[row][col] == 4:
-                    direction = np.array([0, 1])
-                elif self.game_map[row][col] == 5:
-                    direction = np.array([0, -1])
-                else:
-                    continue
-                # Following code only executes if the object is a laser generator
-                # Trace the laser's path until it hits a wall, changing direction at mirrors
-                loc = np.array([row, col])
-                loc += direction
-                while (loc[0] < self.laser_map.shape[0] and loc[0] >= 0 and loc[1] < self.laser_map.shape[1] and loc[1] >= 0):
-                    if self.game_map[loc[0]][loc[1]] == 1:
-                        break
-                    elif self.game_map[loc[0]][loc[1]] in [2, 3, 4, 5]:
-                        self.laser_map[loc[0]][loc[1]] = 1
-                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
-                        break
-                    elif self.game_map[loc[0]][loc[1]] == 9: # Right mirror
-                        self.laser_map[loc[0]][loc[1]] = 1
-                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
-                        direction = np.array([direction[1] * -1, direction[0] * -1])
-                        is_vertical = 0 if is_vertical else 1 # Invert is_vertical, since we hit a mirror
-                    elif self.game_map[loc[0]][loc[1]] == 10:
-                        self.laser_map[loc[0]][loc[1]] = 1
-                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
-                        direction = np.array([direction[1], direction[0]])
-                        is_vertical = 0 if is_vertical else 1 # Invert is_vertical, since we hit a mirror
-                    else:
-                        self.laser_map[loc[0]][loc[1]] = 1
-                        self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
-                    loc += direction
                 
 if __name__ == '__main__':
 
@@ -617,37 +696,29 @@ if __name__ == '__main__':
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--augment_rewards', '-a', action='store_true')
     parser.add_argument('--qlearning', '-q', action='store_true')
-    parser.add_argument('--sarsa', '-s', action='store_true')
     args = parser.parse_args()
 
-    game_map = ORDERING_MAP
+    game_map = GO_ABOVE
 
     if args.qlearning:
-        print("Learning with Q-Learning")
-        Q, i = qlearning(DweepEnv(game_map, size=10, augment_rewards=args.augment_rewards), 
-        episodes=20000, alpha=0.1, gamma=0.95, eps=0.2)
-    elif args.sarsa:
-        print("Learning with SARSA")
-        Q, i = sarsa(DweepEnv(game_map, size=10, augment_rewards=args.augment_rewards), 
-        episodes=120000, alpha=0.1, gamma=0.95, eps=0.2)
+        Q = qlearning(DweepEnv(game_map, size=10, augment_rewards=args.augment_rewards), 
+        episodes=3000, alpha=0.1, gamma=0.95, eps=0.2)
 
     env = DweepEnv(game_map, render_mode="human", size=10, augment_rewards=args.augment_rewards)
     env.reset()
-
-    print("Executing policy:")
-    # for _ in range(30000):
-    #     if not args.qlearning:
-    #         action = env.action_space.sample()  # take a random action
-    #     else:
-    #         action = np.argmax(Q[env.get_state_idx()])
+    print("Executing policy: ")
+    for _ in range(30000):
+        if not args.qlearning:
+            action = env.action_space.sample()  # take a random action
+        else:
+            action = np.argmax(Q[env.get_state_idx()])
+            next_state, reward, done, _, _ = env.step(action)
 
     # Visualize learned policy
-    print(Q.shape)
-    done = False
-    while not done:
-        action = np.argmax(Q[env.get_state_idx()])
-        print(action)
-        next_state, reward, done, _, _ = env.step(action)
+    # done = False
+    # while not done:
+    #     action = np.argmax(Q[env.get_state_idx()])
+    #     next_state, reward, done, _, _ = env.step(action)
 
     # Keep visualization for a few seconds for human watching
     time.sleep(10)
