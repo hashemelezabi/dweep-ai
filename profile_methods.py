@@ -1,5 +1,5 @@
 import os
-from new_dweep import GO_ABOVE, HARD_MAP, ORDERING_MAP, DweepEnv
+from dweep_gym.envs.dweep_env import GO_ABOVE, HARD_MAP, ORDERING_MAP, DweepEnv
 from policy_learning import qlearning, sarsa
 import matplotlib.pyplot as plt
 

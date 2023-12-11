@@ -1,7 +1,7 @@
 import os
 import pickle
-import gym
-from gym import spaces
+import gymnasium
+from gymnasium import spaces
 import pygame
 import numpy as np
 import argparse
@@ -196,7 +196,7 @@ def get_target_distances(game_map):
 ####### END UTILS #########
 ####################################
 
-class DweepEnv(gym.Env):
+class DweepEnv(gymnasium.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
     TARGET_REWARD = 1000
 
@@ -206,7 +206,7 @@ class DweepEnv(gym.Env):
                 if game_map[i, j] == 6:
                     return np.array([i, j])
 
-    def __init__(self, game_map, render_mode=None, size=5, augment_rewards=False):
+    def __init__(self, game_map=ORDERING_MAP, render_mode=None, size=5, augment_rewards=False):
         self.size = size  # The size of the square grid
         self.window_size = 520  # The size of the PyGame window
 
@@ -221,6 +221,7 @@ class DweepEnv(gym.Env):
         self.observation_space = spaces.Dict(
             {
                 "agent": spaces.Box(0, size - 1, shape=(2,), dtype=int),
+                "target": spaces.Box(0, size - 1, shape=(2,), dtype=int),
                 "cursor": spaces.Box(0, size - 1, shape=(2,), dtype=int),
                 "mirror_placed": spaces.Discrete(3),
                 "wet": spaces.Discrete(2),
@@ -616,65 +617,3 @@ class DweepEnv(gym.Env):
                         self.laser_is_vertical[loc[0]][loc[1]] = is_vertical
                     loc += direction
                 
-if __name__ == '__main__':
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--render', action='store_true')
-    parser.add_argument('--augment_rewards', '-a', action='store_true')
-    parser.add_argument('--qlearning', '-q', action='store_true')
-    parser.add_argument('--sarsa', '-s', action='store_true')
-    parser.add_argument('--rec_pause', '-r', action='store_true')
-    parser.add_argument('--load', '-l', action='store_true')
-
-    args = parser.parse_args()
-
-    game_map = ORDERING_MAP
-
-    if args.qlearning:
-        print("Learning with Q-Learning")
-        Q, _, _, _ = qlearning(DweepEnv(game_map, size=10, augment_rewards=args.augment_rewards), 
-            episodes=100, alpha=0.1, gamma=0.95, eps=0.2, verbose=True)
-    elif args.sarsa:
-        print("Learning with SARSA")
-        Q, _, _, _ = sarsa(DweepEnv(game_map, size=10, augment_rewards=args.augment_rewards), 
-            episodes=120000, alpha=0.1, gamma=0.95, eps=0.2, verbose=True)
-    elif args.load:
-        print("Loading policy")
-        Q = pickle.load(open('policy/q_policy.pkl', 'rb'))
-
-    env = DweepEnv(game_map, render_mode="human", size=10, augment_rewards=args.augment_rewards)
-    env.reset()
-
-    # print("Executing policy:")
-    # for _ in range(30000):
-    #     if not args.qlearning:
-    #         action = env.action_space.sample()  # take a random action
-    #     else:
-    #         action = np.argmax(Q[env.get_state_idx()])
-
-    # Visualize learned policy
-
-    print("q shape: ", Q.shape)
-
-    if not os.path.exists('policy'):
-        os.makedirs('policy')
-    
-    pickle.dump(Q, open('policy/q_policy.pkl', 'wb'))
-    
-    done = False
-
-    while not done:
-        if args.rec_pause:
-            time.sleep(10)
-            args.rec_pause = False
-
-        action = np.argmax(Q[env.get_state_idx()])
-        print(action)
-        next_state, reward, done, _, _ = env.step(action)
-        
-        print("Action: ", action)
-
-    # Keep visualization for a few seconds for human watching
-    time.sleep(10)
-
-    env.close()
