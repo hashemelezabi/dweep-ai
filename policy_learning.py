@@ -1,3 +1,4 @@
+from matplotlib.pylab import solve
 import numpy as np
 import random
 
@@ -9,6 +10,10 @@ def qlearning(env, alpha, gamma, eps, episodes=1000, return_on_success=False, ve
 
     num_success = 0
     state = env.reset()
+    avg_rewards = []
+
+    solved = False
+    first_solve_episode = None
 
     for i in range(episodes):
         if verbose:
@@ -37,20 +42,25 @@ def qlearning(env, alpha, gamma, eps, episodes=1000, return_on_success=False, ve
             # new_value = (1 - alpha) * old_value + alpha * (reward + gamma * next_max)
             # q_table[state, action] = new_value
 
-            if reward == 1000:
+            if reward == env.TARGET_REWARD:
                 num_success += 1
                 if return_on_success:
-                    return Q, i
+                    return Q, i, avg_rewards, i
+                if not solved:
+                    solved = True
+                    first_solve_episode = i
 
 
             state = next_state
             steps += 1
+
+        avg_rewards.append(total_rewards / steps)
         
         if i % 10 == 0 and verbose:
             print(f"Avg return this episode: {total_rewards / steps}")
             print(f"{num_success} successes out of {i+1} episodes")
 
-    return Q, i
+    return Q, i, avg_rewards, first_solve_episode
 
 def sarsa(env, alpha, gamma, eps, episodes=1000, return_on_success=False, verbose=False):
     num_states = env.num_states
@@ -60,6 +70,10 @@ def sarsa(env, alpha, gamma, eps, episodes=1000, return_on_success=False, verbos
 
     num_success = 0
     state = env.reset()
+    avg_rewards = []
+
+    solved = False
+    first_solve_episode = None
 
     for i in range(episodes):
         if verbose:
@@ -88,16 +102,21 @@ def sarsa(env, alpha, gamma, eps, episodes=1000, return_on_success=False, verbos
             last_exp_tuple = (state_idx, action, reward)
 
             total_rewards += reward    
-            if reward == 1000:
+            if reward == env.TARGET_REWARD:
                 num_success += 1
                 if return_on_success:
-                    return Q, i
+                    return Q, i, avg_rewards, i
+                if not solved:
+                    solved = True
+                    first_solve_episode = i
 
             state = next_state
             steps += 1
+
+        avg_rewards.append(total_rewards / steps)
         
         if i % 10 == 0 and verbose:
             print(f"Avg return this episode: {total_rewards / steps}")
             print(f"{num_success} successes out of {i+1} episodes")
 
-    return Q, i
+    return Q, i, avg_rewards, first_solve_episode
